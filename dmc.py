@@ -7,6 +7,10 @@ from dm_control import manipulation, suite
 from dm_control.suite.wrappers import action_scale, pixels
 from dm_env import StepType, specs
 
+import custom_arc_tasks 
+from custom_arc_tasks.arc_env import ARCToDMCAdapter
+from custom_arc_tasks.arc_wrapper import PointWrapper
+
 import custom_dmc_tasks as cdmc
 
 
@@ -179,15 +183,40 @@ class ActionDTypeWrapper(dm_env.Environment):
     def __init__(self, env, dtype):
         self._env = env
         wrapped_action_spec = env.action_spec()
-        self._action_spec = specs.BoundedArray(wrapped_action_spec.shape,
-                                               dtype,
-                                               wrapped_action_spec.minimum,
-                                               wrapped_action_spec.maximum,
-                                               'action')
+        
+        if isinstance(wrapped_action_spec, tuple):
+            position_spec, operation_spec = wrapped_action_spec
+            self._action_spec = (
+                specs.DiscreteArray(
+                    dtype=np.int32,  # float32 대신 int32 사용
+                    num_values=position_spec.num_values,
+                    name='position'
+                ),
+                specs.DiscreteArray(
+                    dtype=np.int32,  # float32 대신 int32 사용
+                    num_values=operation_spec.num_values,
+                    name='operation'
+                )
+            )
+        else:  # DMC 환경
+            self._action_spec = specs.BoundedArray(
+                wrapped_action_spec.shape,
+                dtype,
+                wrapped_action_spec.minimum,
+                wrapped_action_spec.maximum,
+                'action'
+            )
 
     def step(self, action):
-        action = action.astype(self._env.action_spec().dtype)
-        return self._env.step(action)
+        if isinstance(action, tuple):  # arc 환경
+            position, operation = action
+            converted_action = (
+                position.cpu().numpy().astype(np.int32),  # GPU -> CPU -> numpy
+                operation.cpu().numpy().astype(np.int32)  # GPU -> CPU -> numpy
+            )
+        else:  # dmc 환경
+            converted_action = action.astype(self._env.action_spec().dtype)
+        return self._env.step(converted_action)
 
     def observation_spec(self):
         return self._env.observation_spec()
@@ -247,7 +276,16 @@ class ExtendedTimeStepWrapper(dm_env.Environment):
     def _augment_time_step(self, time_step, action=None):
         if action is None:
             action_spec = self.action_spec()
-            action = np.zeros(action_spec.shape, dtype=action_spec.dtype)
+
+            if isinstance(action_spec, tuple):  # arc 환경
+                position_spec, operation_spec = action_spec
+                # 두 개의 값을 담는 tuple로 초기화
+                action = (
+                    np.zeros((), dtype=position_spec.dtype),
+                    np.zeros((), dtype=operation_spec.dtype)
+                )
+            else:  # dmc 환경
+                action = np.zeros(action_spec.shape, dtype=action_spec.dtype)
         return ExtendedTimeStep(observation=time_step.observation,
                                 step_type=time_step.step_type,
                                 action=action,
@@ -299,19 +337,43 @@ def _make_dmc(obs_type, domain, task, frame_stack, action_repeat, seed):
     return env
 
 
+def _make_arc(obs_type, domain, task, frame_stack, action_repeat, seed):
+    from arcle.loaders import ARCLoader
+    from arcle.envs import O2ARCv2Env
+
+    # ARC 환경 생성
+    env = O2ARCv2Env(
+        data_loader=ARCLoader(),
+        max_grid_size=(30, 30),
+        colors=10
+    )
+    
+    # DMControl 인터페이스로 변환
+    # env = PointWrapper(env)
+    env = ARCToDMCAdapter(env, max_episode_steps=200)
+    env = ActionDTypeWrapper(env, np.float32)
+    env = ActionRepeatWrapper(env, action_repeat)
+    return env
+
 def make(name, obs_type, frame_stack, action_repeat, seed):
-    assert obs_type in ['states', 'pixels']
+    assert obs_type in ['states', 'pixels', 'arc']
     domain, task = name.split('_', 1)
-    domain = dict(cup='ball_in_cup').get(domain, domain)
+    
+    if domain == 'arc':
+        make_fn = _make_arc
+    else:
+        domain = dict(cup='ball_in_cup').get(domain, domain)
+        make_fn = _make_jaco if domain == 'jaco' else _make_dmc
 
-    make_fn = _make_jaco if domain == 'jaco' else _make_dmc
     env = make_fn(obs_type, domain, task, frame_stack, action_repeat, seed)
-
+    
     if obs_type == 'pixels':
         env = FrameStackWrapper(env, frame_stack)
     else:
         env = ObservationDTypeWrapper(env, np.float32)
 
-    env = action_scale.Wrapper(env, minimum=-1.0, maximum=+1.0)
+    if domain != 'arc':
+        env = action_scale.Wrapper(env, minimum=-1.0, maximum=+1.0)
+        
     env = ExtendedTimeStepWrapper(env)
     return env

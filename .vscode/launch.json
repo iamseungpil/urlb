@@ -1,0 +1,19 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+
+        {
+            "name": "Python: Pretrain DIAYN",
+            "type": "python",
+            "request": "launch",
+            "program": "pretrain.py",
+            "console": "integratedTerminal",
+            "args": [
+                "agent=diayn",
+                "domain=arc"
+            ],
+            "env": {"PYTHONPATH": "${cwd}"},
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}

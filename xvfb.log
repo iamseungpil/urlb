@@ -1,0 +1,18 @@
+_XSERVTransmkdir: Mode of /tmp/.X11-unix should be set to 1777
+_XSERVTransSocketCreateListener: failed to bind listener
+_XSERVTransSocketUNIXCreateListener: ...SocketCreateListener() failed
+_XSERVTransMakeAllCOTSServerListeners: failed to create listener for unix
+MESA-LOADER: failed to open vgem: /usr/lib/dri/vgem_dri.so: cannot open shared object file: No such file or directory (search paths /usr/lib/x86_64-linux-gnu/dri:\$${ORIGIN}/dri:/usr/lib/dri, suffix _dri)
+did not find extension DRI_Mesa version 1
+failed to bind extensions
+did not find extension DRI_Mesa version 1
+failed to bind extensions
+did not find extension DRI_Mesa version 1
+failed to bind extensions
+MESA-LOADER: failed to open vgem: /usr/lib/dri/vgem_dri.so: cannot open shared object file: No such file or directory (search paths /usr/lib/x86_64-linux-gnu/dri:\$${ORIGIN}/dri:/usr/lib/dri, suffix _dri)
+did not find extension DRI_Mesa version 1
+failed to bind extensions
+did not find extension DRI_Mesa version 1
+failed to bind extensions
+did not find extension DRI_Mesa version 1
+failed to bind extensions

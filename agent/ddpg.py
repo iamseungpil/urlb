@@ -34,38 +34,66 @@ class Encoder(nn.Module):
 class Actor(nn.Module):
     def __init__(self, obs_type, obs_dim, action_dim, feature_dim, hidden_dim):
         super().__init__()
-
+        self.obs_type = obs_type
         feature_dim = feature_dim if obs_type == 'pixels' else hidden_dim
 
-        self.trunk = nn.Sequential(nn.Linear(obs_dim, feature_dim),
-                                   nn.LayerNorm(feature_dim), nn.Tanh())
+        # trunk는 모든 type에서 공통
+        self.trunk = nn.Sequential(
+            nn.Linear(obs_dim, feature_dim),
+            nn.LayerNorm(feature_dim), 
+            nn.Tanh()
+        )
 
+        # 공통 policy layers
         policy_layers = []
         policy_layers += [
             nn.Linear(feature_dim, hidden_dim),
             nn.ReLU(inplace=True)
         ]
-        # add additional hidden layer for pixels
-        if obs_type == 'pixels':
+
+        # pixels나 arc의 경우 추가 layer
+        if obs_type in ['pixels', 'arc']:
             policy_layers += [
                 nn.Linear(hidden_dim, hidden_dim),
                 nn.ReLU(inplace=True)
             ]
-        policy_layers += [nn.Linear(hidden_dim, action_dim)]
 
-        self.policy = nn.Sequential(*policy_layers)
+        # 최종 output layer
+        if obs_type == 'arc':
+            num_positions, num_operations = (action_dim if isinstance(action_dim, tuple) 
+                                          else (900, 10))  # default values
+            self.position_policy = nn.Sequential(
+                *policy_layers,
+                nn.Linear(hidden_dim, num_positions)
+            )
+            self.operation_policy = nn.Sequential(
+                *policy_layers,
+                nn.Linear(hidden_dim, num_operations)
+            )
+        else:
+            policy_layers += [
+                nn.Linear(hidden_dim, action_dim)
+            ]
+            self.policy = nn.Sequential(*policy_layers)
 
         self.apply(utils.weight_init)
 
     def forward(self, obs, std):
         h = self.trunk(obs)
+        if self.obs_type == 'arc':  # ARC 환경
+            pos_logits = self.position_policy(h)
+            op_logits = self.operation_policy(h)
+            
+            # position과 operation에 대한 확률 분포 반환
+            return F.softmax(pos_logits, dim=-1), F.softmax(op_logits, dim=-1)
+            
+        else:  
+            mu = self.policy(h)
+            mu = torch.tanh(mu)
+            std = torch.ones_like(mu) * std
 
-        mu = self.policy(h)
-        mu = torch.tanh(mu)
-        std = torch.ones_like(mu) * std
-
-        dist = utils.TruncatedNormal(mu, std)
-        return dist
+            dist = utils.TruncatedNormal(mu, std)
+            return dist
 
 
 class Critic(nn.Module):
@@ -142,7 +170,10 @@ class DDPGAgent:
         self.reward_free = reward_free
         self.obs_type = obs_type
         self.obs_shape = obs_shape
-        self.action_dim = action_shape[0]
+        if isinstance(action_shape, tuple):
+            self.action_dim = action_shape  # arc 환경용
+        else:
+            self.action_dim = action_shape[0]  # dmc 환경용
         self.hidden_dim = hidden_dim
         self.lr = lr
         self.device = device
@@ -221,14 +252,24 @@ class DDPGAgent:
         inpt = torch.cat(inputs, dim=-1)
         #assert obs.shape[-1] == self.obs_shape[-1]
         stddev = utils.schedule(self.stddev_schedule, step)
-        dist = self.actor(inpt, stddev)
-        if eval_mode:
-            action = dist.mean
-        else:
-            action = dist.sample(clip=None)
-            if step < self.num_expl_steps:
-                action.uniform_(-1.0, 1.0)
-        return action.cpu().numpy()[0]
+        
+        if self.obs_type == 'arc': # ARC 환경
+            mask, op = self.actor(inpt, stddev)
+            if eval_mode:
+                return mask.sigmoid() > 0.5, op.argmax(dim=-1)
+            else:
+                mask = mask + torch.randn_like(mask) * stddev if step >= self.num_expl_steps else torch.rand_like(mask)
+                op = op + torch.randn_like(op) * stddev if step >= self.num_expl_steps else torch.rand_like(op)
+                return mask.sigmoid() > 0.5, op.argmax(dim=-1)
+        else:  # 기존 환경
+            dist = self.actor(inpt, stddev)
+            if eval_mode:
+                action = dist.mean
+            else:
+                action = dist.sample(clip=None)
+                if step < self.num_expl_steps:
+                    action.uniform_(-1.0, 1.0)
+            return action.cpu().numpy()[0]
 
     def update_critic(self, obs, action, reward, discount, next_obs, step):
         metrics = dict()

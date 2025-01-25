@@ -5,7 +5,8 @@ warnings.filterwarnings('ignore', category=DeprecationWarning)
 import os
 
 os.environ['MKL_SERVICE_FORCE_INTEL'] = '1'
-os.environ['MUJOCO_GL'] = 'egl'
+os.environ['MUJOCO_GL'] = 'glfw'
+os.environ['PYOPENGL_PLATFORM'] = 'glfw'
 
 from pathlib import Path
 
@@ -29,7 +30,13 @@ from dmc_benchmark import PRIMAL_TASKS
 def make_agent(obs_type, obs_spec, action_spec, num_expl_steps, cfg):
     cfg.obs_type = obs_type
     cfg.obs_shape = obs_spec.shape
-    cfg.action_shape = action_spec.shape
+
+    if isinstance(action_spec, tuple):  # arc 환경
+        position_spec, operation_spec = action_spec
+        cfg.action_shape = (position_spec.num_values, operation_spec.num_values)
+    else:  # dmc 환경
+        cfg.action_shape = action_spec.shape
+        
     cfg.num_expl_steps = num_expl_steps
     return hydra.utils.instantiate(cfg)
 

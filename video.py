@@ -34,6 +34,10 @@ class VideoRecorder:
                 frame = env.physics.render(height=self.render_size,
                                            width=self.render_size,
                                            camera_id=self.camera_id)
+            elif hasattr(env, 'get_pixels'):  # ARC 환경용
+                frame = env.get_pixels()
+                frame = cv2.resize(frame, (self.render_size, self.render_size),
+                                interpolation=cv2.INTER_NEAREST)
             else:
                 frame = env.render()
             self.frames.append(frame)
@@ -80,10 +84,19 @@ class TrainVideoRecorder:
 
     def record(self, obs):
         if self.enabled:
-            frame = cv2.resize(obs[-3:].transpose(1, 2, 0),
-                               dsize=(self.render_size, self.render_size),
-                               interpolation=cv2.INTER_CUBIC)
+            if isinstance(obs, dict) and 'grid' in obs:  # ARC 환경용
+                frame = self._render_arc_obs(obs)
+            else:  # DMControl 환경용
+                frame = cv2.resize(obs[-3:].transpose(1, 2, 0),
+                            dsize=(self.render_size, self.render_size),
+                            interpolation=cv2.INTER_CUBIC)
             self.frames.append(frame)
+
+    def _render_arc_obs(self, obs):
+        grid = obs['grid'].reshape(30, 30)
+        frame = self._grid_to_rgb(grid)
+        return cv2.resize(frame, (self.render_size, self.render_size),
+                        interpolation=cv2.INTER_NEAREST)
 
     def log_to_wandb(self):
         frames = np.transpose(np.array(self.frames), (0, 3, 1, 2))
@@ -99,3 +112,23 @@ class TrainVideoRecorder:
                 self.log_to_wandb()
             path = self.save_dir / file_name
             imageio.mimsave(str(path), self.frames, fps=self.fps)
+
+    def _grid_to_rgb(self, grid):
+        colors = {
+            0: [0, 0, 0],      # 검정
+            1: [0, 0, 255],    # 파랑 
+            2: [255, 0, 0],    # 빨강
+            3: [0, 255, 0],    # 초록
+            4: [255, 255, 0],  # 노랑
+            5: [128, 128, 128],# 회색
+            6: [255, 0, 255],  # 보라
+            7: [255, 165, 0],  # 주황
+            8: [0, 255, 255],  # 하늘
+            9: [128, 0, 0]     # 갈색
+        }
+        H, W = grid.shape
+        frame = np.zeros((H, W, 3), dtype=np.uint8)
+        for i in range(H):
+            for j in range(W):
+                frame[i,j] = colors[grid[i,j]]
+        return frame

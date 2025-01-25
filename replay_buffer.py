@@ -45,20 +45,52 @@ class ReplayBufferStorage:
     def add(self, time_step, meta):
         for key, value in meta.items():
             self._current_episode[key].append(value)
+
         for spec in self._data_specs:
-            value = time_step[spec.name]
-            if np.isscalar(value):
-                value = np.full(spec.shape, value, spec.dtype)
-            assert spec.shape == value.shape and spec.dtype == value.dtype
-            self._current_episode[spec.name].append(value)
+            # action spec이 tuple인 경우 처리
+            if isinstance(spec, tuple):
+                position_spec, operation_spec = spec
+                position, operation = time_step.action
+                self._current_episode[position_spec.name].append(position)
+                self._current_episode[operation_spec.name].append(operation)
+            else:
+                value = time_step[spec.name]
+                if np.isscalar(value):
+                    value = np.full(spec.shape, value, spec.dtype)
+                assert spec.shape == value.shape and spec.dtype == value.dtype
+                self._current_episode[spec.name].append(value)
+
         if time_step.last():
             episode = dict()
             for spec in self._data_specs:
-                value = self._current_episode[spec.name]
-                episode[spec.name] = np.array(value, spec.dtype)
+                if isinstance(spec, tuple):
+                    # GPU -> CPU -> numpy 변환
+                    positions = [p.flatten() if isinstance(p, np.ndarray) else np.array(p).flatten() 
+                           for p in self._current_episode['position']]
+                    operations = [o.flatten() if isinstance(o, np.ndarray) else np.array(o).flatten() 
+                                for o in self._current_episode['operation']]
+                    
+                    # Pad arrays to make them the same size if needed
+                    max_pos_size = max(p.size for p in positions)
+                    max_op_size = max(o.size for o in operations)
+                    
+                    padded_positions = np.array([
+                        np.pad(p, (0, max_pos_size - p.size)) for p in positions
+                    ])
+                    padded_operations = np.array([
+                        np.pad(o, (0, max_op_size - o.size)) for o in operations
+                    ])
+                    
+                    episode['position'] = padded_positions
+                    episode['operation'] = padded_operations
+                else:
+                    value = self._current_episode[spec.name]
+                    episode[spec.name] = np.array(value, spec.dtype)
+                    
             for spec in self._meta_specs:
                 value = self._current_episode[spec.name]
                 episode[spec.name] = np.array(value, spec.dtype)
+                
             self._current_episode = defaultdict(list)
             self._store_episode(episode)
 
@@ -148,8 +180,12 @@ class ReplayBuffer(IterableDataset):
             traceback.print_exc()
         self._samples_since_last_fetch += 1
         episode = self._sample_episode()
+        episode_length = episode_len(episode)
         # add +1 for the first dummy transition
-        idx = np.random.randint(0, episode_len(episode) - self._nstep + 1) + 1
+        if episode_length <= self._nstep:
+            idx = 1  # minimum valid index
+        else:
+            idx = np.random.randint(0, episode_length - self._nstep + 1) + 1
         meta = []
         for spec in self._storage._meta_specs:
             meta.append(episode[spec.name][idx - 1])
