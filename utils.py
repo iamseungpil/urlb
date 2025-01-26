@@ -53,7 +53,12 @@ def hard_update_params(net, target_net):
 
 
 def to_torch(xs, device):
-    return tuple(torch.as_tensor(x, device=device) for x in xs)
+    if isinstance(xs[1], list):  # action이 list인 경우
+        action_tensors = [torch.as_tensor(x, device=device) for x in xs[1]]
+        other_tensors = [torch.as_tensor(x, device=device) for i, x in enumerate(xs) if i != 1]
+        return (other_tensors[0], tuple(action_tensors)) + tuple(other_tensors[1:])
+    else:
+        return tuple(torch.as_tensor(x, device=device) for x in xs)
 
 
 def weight_init(m):

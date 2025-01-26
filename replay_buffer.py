@@ -65,11 +65,10 @@ class ReplayBufferStorage:
             for spec in self._data_specs:
                 if isinstance(spec, tuple):
                     # GPU -> CPU -> numpy 변환
-                    positions = [p.flatten() if isinstance(p, np.ndarray) else np.array(p).flatten() 
+                    positions = [p.cpu().numpy().flatten() if torch.is_tensor(p) else p.flatten() 
                            for p in self._current_episode['position']]
-                    operations = [o.flatten() if isinstance(o, np.ndarray) else np.array(o).flatten() 
+                    operations = [o.cpu().numpy().flatten() if torch.is_tensor(o) else o.flatten() 
                                 for o in self._current_episode['operation']]
-                    
                     # Pad arrays to make them the same size if needed
                     max_pos_size = max(p.size for p in positions)
                     max_op_size = max(o.size for o in operations)
@@ -190,7 +189,11 @@ class ReplayBuffer(IterableDataset):
         for spec in self._storage._meta_specs:
             meta.append(episode[spec.name][idx - 1])
         obs = episode['observation'][idx - 1]
-        action = episode['action'][idx]
+
+        if 'position' in episode and 'operation' in episode:
+            action = (episode['position'][idx], episode['operation'][idx])
+        else:
+            action = episode['action'][idx]
         next_obs = episode['observation'][idx + self._nstep - 1]
         reward = np.zeros_like(episode['reward'][idx])
         discount = np.ones_like(episode['discount'][idx])

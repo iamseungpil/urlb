@@ -102,11 +102,13 @@ class Critic(nn.Module):
 
         self.obs_type = obs_type
 
-        if obs_type == 'pixels':
-            # for pixels actions will be added after trunk
-            self.trunk = nn.Sequential(nn.Linear(obs_dim, feature_dim),
-                                       nn.LayerNorm(feature_dim), nn.Tanh())
-            trunk_dim = feature_dim + action_dim
+        if obs_type == 'arc':
+            self.trunk = nn.Sequential(
+                nn.Linear(obs_dim, hidden_dim),
+                nn.LayerNorm(hidden_dim), 
+                nn.Tanh()
+            )
+            trunk_dim = hidden_dim
         else:
             # for states actions come in the beginning
             self.trunk = nn.Sequential(
@@ -134,15 +136,24 @@ class Critic(nn.Module):
         self.apply(utils.weight_init)
 
     def forward(self, obs, action):
-        inpt = obs if self.obs_type == 'pixels' else torch.cat([obs, action],
-                                                               dim=-1)
-        h = self.trunk(inpt)
-        h = torch.cat([h, action], dim=-1) if self.obs_type == 'pixels' else h
-
-        q1 = self.Q1(h)
-        q2 = self.Q2(h)
-
-        return q1, q2
+        if self.obs_type == 'arc':
+            mask, op = action
+            # 차원 맞추기
+            action_combined = torch.cat([mask.float().view(mask.shape[0], -1), 
+                                    op.float().view(op.shape[0], -1)], dim=-1)
+            h = self.trunk(obs)  # obs만 trunk에 입력
+            q1 = self.Q1(h)
+            q2 = self.Q2(h)
+            return q1, q2
+        else:
+            # 기존 로직
+            inpt = obs if self.obs_type == 'pixels' else torch.cat([obs, action], dim=-1)
+            h = self.trunk(inpt)
+            h = torch.cat([h, action], dim=-1) if self.obs_type == 'pixels' else h
+            
+            q1 = self.Q1(h)
+            q2 = self.Q2(h)
+            return q1, q2
 
 
 class DDPGAgent:
@@ -276,9 +287,15 @@ class DDPGAgent:
 
         with torch.no_grad():
             stddev = utils.schedule(self.stddev_schedule, step)
-            dist = self.actor(next_obs, stddev)
-            next_action = dist.sample(clip=self.stddev_clip)
-            target_Q1, target_Q2 = self.critic_target(next_obs, next_action)
+            if self.obs_type == 'arc':
+                next_mask, next_op = self.actor(next_obs, stddev)
+                next_action = (next_mask, next_op)
+                target_Q1, target_Q2 = self.critic_target(next_obs, next_action)
+            else:
+                dist = self.actor(next_obs, stddev)
+                next_action = dist.sample(clip=self.stddev_clip)
+                target_Q1, target_Q2 = self.critic_target(next_obs, next_action)
+
             target_V = torch.min(target_Q1, target_Q2)
             target_Q = reward + (discount * target_V)
 
@@ -305,13 +322,19 @@ class DDPGAgent:
         metrics = dict()
 
         stddev = utils.schedule(self.stddev_schedule, step)
-        dist = self.actor(obs, stddev)
-        action = dist.sample(clip=self.stddev_clip)
-        log_prob = dist.log_prob(action).sum(-1, keepdim=True)
-        Q1, Q2 = self.critic(obs, action)
-        Q = torch.min(Q1, Q2)
 
-        actor_loss = -Q.mean()
+        if self.obs_type == 'arc':
+            mask, op = self.actor(obs, stddev)
+            Q1, Q2 = self.critic(obs, (mask, op))
+            Q = torch.min(Q1, Q2)
+            actor_loss = -Q.mean()
+        else:
+            dist = self.actor(obs, stddev)
+            action = dist.sample(clip=self.stddev_clip)
+            log_prob = dist.log_prob(action).sum(-1, keepdim=True)
+            Q1, Q2 = self.critic(obs, action)
+            Q = torch.min(Q1, Q2)
+            actor_loss = -Q.mean()
 
         # optimize actor
         self.actor_opt.zero_grad(set_to_none=True)
